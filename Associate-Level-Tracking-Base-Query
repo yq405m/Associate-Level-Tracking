@@ -1,0 +1,122 @@
+--shipping
+with shipping_prep as (
+select distinct
+    tran_type
+    , description	
+    , wh_id
+    , outside_id
+    , location_id
+    , item_number
+    , case 
+            when REGEXP_CONTAINS(item_number,'-') then LPAD(item_number, CHAR_LENGTH(item_number) - (CHAR_LENGTH(item_number) - STRPOS(item_number, '-') + 1)) -- multibox, find position of '-' and trim all after 
+            when substr(item_number, -1) between 'A' and 'Z' then LPAD(item_number, CHAR_LENGTH(item_number)-1)  -- return items, if end as letter then trim last digit 
+            else item_number end as Sprid2
+    , coalesce(hu_id,hu_id_2) huid
+    , control_number QCResults
+    , tran_log_id TranLogID
+    , cast(insert_timestamp as datetime) Timestamps
+    , coalesce(employee_id, employee_id_2) employeeid_shipping
+    , row_number() over (partition by item_number, coalesce(hu_id, hu_id_2) order by tran_log_id desc) RowPartition_shipping
+from `wf-gcp-us-ae-bulk-prod.aad.t_tran_log` 
+where tran_type IN ('341')
+)
+
+, Shipping as(
+select * from shipping_prep
+where RowPartition_shipping = 1 or RowPartition_shipping is null
+)
+
+
+-- Overpack
+, Overpack_prep as (
+    select distinct
+        tran_type
+        , description	
+        , wh_id
+        , outside_id
+        , location_id
+        , item_number
+        , case 
+            when REGEXP_CONTAINS(item_number,'-') then LPAD(item_number, CHAR_LENGTH(item_number) - (CHAR_LENGTH(item_number) - STRPOS(item_number, '-') + 1)) -- multibox, find position of '-' and trim all after 
+            when substr(item_number, -1) between 'A' and 'Z' then LPAD(item_number, CHAR_LENGTH(item_number)-1)  -- return items, if end as letter then trim last digit 
+            else item_number end as Sprid2
+        , control_number_2  OPType
+        , coalesce(hu_id, hu_id_2) huid
+        , coalesce(employee_id, employee_id_2) employeeid_overpack
+        , tran_log_id TranLogID
+        , cast(insert_timestamp as datetime) Timestamps
+        , row_number() over (partition by item_number, coalesce(hu_id, hu_id_2) order by tran_log_id desc) RowPartition_Overpack
+     from `wf-gcp-us-ae-bulk-prod.aad.t_tran_log` 
+    where tran_type = '612' 
+    and control_number_2 in ('66','67','70')
+    )
+
+, Overpack as (
+select * from Overpack_prep 
+where RowPartition_Overpack = 1 or RowPartition_Overpack is null
+)
+
+-- QC Inspection
+, Inspection_prep as (
+    select distinct
+        tran_type
+        , description	
+        , wh_id
+        , outside_id
+        , location_id
+        , item_number
+        , case 
+            when REGEXP_CONTAINS(item_number,'-') then LPAD(item_number, CHAR_LENGTH(item_number) - (CHAR_LENGTH(item_number) - STRPOS(item_number, '-') + 1)) -- multibox, find position of '-' and trim all after 
+            when substr(item_number, -1) between 'A' and 'Z' then LPAD(item_number, CHAR_LENGTH(item_number)-1)  -- return items, if end as letter then trim last digit 
+            else item_number end as Sprid2
+        , control_number
+        , coalesce(hu_id, hu_id_2) huid
+        , coalesce(employee_id, employee_id_2) employeeid_inspection
+        , tran_log_id TranLogID
+        , cast(insert_timestamp as datetime) Timestamps
+        , row_number() over (partition by item_number, coalesce(hu_id, hu_id_2) order by tran_log_id desc) RowPartition_Inspection
+     from `wf-gcp-us-ae-bulk-prod.aad.t_tran_log` 
+    where tran_type = '612' 
+    and control_number like 'QC%'
+    )
+
+, Inspection as (
+select * from Inspection_prep 
+where RowPartition_Inspection = 1 or RowPartition_Inspection is null)
+
+-- Receiving
+, receive_prep as (
+    select distinct
+        tran_type
+        , description	
+        , wh_id
+        , outside_id
+        , location_id
+        , item_number
+        , case 
+            when REGEXP_CONTAINS(item_number,'-') then LPAD(item_number, CHAR_LENGTH(item_number) - (CHAR_LENGTH(item_number) - STRPOS(item_number, '-') + 1)) -- multibox, find position of '-' and trim all after 
+            when substr(item_number, -1) between 'A' and 'Z' then LPAD(item_number, CHAR_LENGTH(item_number)-1)  -- return items, if end as letter then trim last digit 
+            else item_number end as Sprid2
+        , control_number
+        , coalesce(hu_id, hu_id_2) huid
+        , coalesce(employee_id, employee_id_2) employeeid_receiving
+        , tran_log_id TranLogID
+        , cast(insert_timestamp as datetime) Timestamps
+        , row_number() over (partition by item_number, coalesce(hu_id, hu_id_2) order by tran_log_id desc) RowPartition_Receiving
+     from `wf-gcp-us-ae-bulk-prod.aad.t_tran_log` 
+    where 1=1
+      and tran_type in ('151','152','161','162')
+      and description = '%Receipt%'
+      and control_number is not null
+    )
+
+, Receiving as (
+select * from receive_prep 
+where RowPartition_Receiving = 1 or RowPartition_Receiving is null)
+
+--Join all
+select *
+from Shipping s 
+left join Overpack o on s.wh_id = o.wh_id and s.huid = o.huid
+left join Inspection i on o.wh_id = i.wh_id and o.huid = i.huid
+left join Receiving r on i.wh_id = r.wh_id and i.huid = r.huid
